@@ -5,26 +5,29 @@
 extern "C" {
 #endif
 
+#define _TIMESPEC_DEFINED
+
 #include <stdint.h>
 #include <protocol.h>
-    
+//#include <unix_time.h>
+
 #define _POSIX_C_SOURCE 199309L
 #define _DARWIN_C_SOURCE 1
     
-#include <arpa/inet.h>
+#include <WinSock2.h>//<arpa/inet.h>
 #include <errno.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
+//#include <netinet/in.h>
+//#include <netinet/tcp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/time.h>
+//#include <sys/ioctl.h>
+//#include <sys/socket.h>
+//#include <sys/time.h>
 #include <sys/types.h>
-#include <unistd.h>
+//#include <unistd.h>
     
 #ifdef __MACH__
 #include <mach/mach.h>
@@ -51,65 +54,65 @@ struct etherdream_point {
 #define DEBUG_THRESHOLD_POINTS	800
 
     
-    struct etherdream_conn {
-        int dc_sock;
-        char dc_read_buf[1024];
-        int dc_read_buf_size;
-        struct dac_response resp;
-        long long dc_last_ack_time;
-        
-        struct {
-            struct queue_command queue;
-            struct data_command_header header;
-            struct dac_point data[1000];
-        } __attribute__((packed)) dc_local_buffer;
-        
-        int dc_begin_sent;
-        int ackbuf[MAX_LATE_ACKS];
-        int ackbuf_prod;
-        int ackbuf_cons;
-        int unacked_points;
-        int pending_meta_acks;
-    };
+struct etherdream_conn {
+    int dc_sock;
+    char dc_read_buf[1024];
+    int dc_read_buf_size;
+    struct dac_response resp;
+    long long dc_last_ack_time;
     
-    struct buffer_item {
-        struct dac_point data[BUFFER_POINTS_PER_FRAME];
-        int points;
-        int pps;
-        int repeatcount;
-        int idx;
-    };
+    struct {
+        struct queue_command queue;
+        struct data_command_header header;
+        struct dac_point data[1000];
+    } __attribute__((packed)) dc_local_buffer;
     
-    enum dac_state {
-        ST_DISCONNECTED,
-        ST_READY,
-        ST_RUNNING,
-        ST_BROKEN,
-        ST_SHUTDOWN
-    };
+    int dc_begin_sent;
+    int ackbuf[MAX_LATE_ACKS];
+    int ackbuf_prod;
+    int ackbuf_cons;
+    int unacked_points;
+    int pending_meta_acks;
+};
+
+struct buffer_item {
+    struct dac_point data[BUFFER_POINTS_PER_FRAME];
+    int points;
+    int pps;
+    int repeatcount;
+    int idx;
+};
+
+enum dac_state {
+    ST_DISCONNECTED,
+    ST_READY,
+    ST_RUNNING,
+    ST_BROKEN,
+    ST_SHUTDOWN
+};
+
+struct etherdream {
+    pthread_mutex_t mutex;
+    pthread_cond_t loop_cond;
     
-    struct etherdream {
-        pthread_mutex_t mutex;
-        pthread_cond_t loop_cond;
-        
-        struct buffer_item buffer[BUFFER_NFRAMES];
-        int frame_buffer_read;
-        int frame_buffer_fullness;
-        int bounce_count;
-        
-        pthread_t workerthread;
-        
-        struct in_addr addr;
-        struct etherdream_conn conn;
-        unsigned long dac_id;
-        int sw_revision;
-        char mac_address[6];
-        char version[32];
-        
-        enum dac_state state;
-        
-        struct etherdream * next;
-    };
+    struct buffer_item buffer[BUFFER_NFRAMES];
+    int frame_buffer_read;
+    int frame_buffer_fullness;
+    int bounce_count;
+    
+    pthread_t workerthread;
+    
+    struct in_addr addr;
+    struct etherdream_conn conn;
+    unsigned long dac_id;
+    int sw_revision;
+    char mac_address[6];
+    char version[32];
+    
+    enum dac_state state;
+    
+    struct etherdream * next;
+};
     
 struct etherdream;
 
@@ -196,6 +199,117 @@ int etherdream_stop(struct etherdream *d);
  * Close the TCP connection to d.
  */
 void etherdream_disconnect(struct etherdream *d);
+
+
+
+#if defined(_MSC_VER) || defined(_MSC_EXTENSIONS)
+#define DELTA_EPOCH_IN_MICROSECS  11644473600000000Ui64
+#else
+#define DELTA_EPOCH_IN_MICROSECS  11644473600000000ULL
+#endif
+
+struct timezone
+{
+	int  tz_minuteswest; /* minutes W of Greenwich */
+	int  tz_dsttime;     /* type of dst correction */
+};
+
+static int gettimeofday(struct timeval *tv, struct timezone *tz)
+{
+	FILETIME ft;
+	unsigned __int64 tmpres = 0;
+	static int tzflag;
+
+	if (NULL != tv)
+	{
+		GetSystemTimeAsFileTime(&ft);
+
+		tmpres |= ft.dwHighDateTime;
+		tmpres <<= 32;
+		tmpres |= ft.dwLowDateTime;
+
+		/*converting file time to unix epoch*/
+		tmpres -= DELTA_EPOCH_IN_MICROSECS;
+		tmpres /= 10;  /*convert into microseconds*/
+		tv->tv_sec = (long)(tmpres / 1000000UL);
+		tv->tv_usec = (long)(tmpres % 1000000UL);
+	}
+
+	if (NULL != tz)
+	{
+		if (!tzflag)
+		{
+			_tzset();
+			tzflag++;
+		}
+		tz->tz_minuteswest = _timezone / 60;
+		tz->tz_dsttime = _daylight;
+	}
+
+	return 0;
+}
+
+static LARGE_INTEGER getFILETIMEoffset()
+{
+	SYSTEMTIME s;
+	FILETIME f;
+	LARGE_INTEGER t;
+
+	s.wYear = 1970;
+	s.wMonth = 1;
+	s.wDay = 1;
+	s.wHour = 0;
+	s.wMinute = 0;
+	s.wSecond = 0;
+	s.wMilliseconds = 0;
+	SystemTimeToFileTime(&s, &f);
+	t.QuadPart = f.dwHighDateTime;
+	t.QuadPart <<= 32;
+	t.QuadPart |= f.dwLowDateTime;
+	return (t);
+}
+
+static int clock_gettime(int X, timespec *tv)//struct timeval *tv)
+{
+	LARGE_INTEGER           t;
+	FILETIME				f;
+	double                  microseconds;
+	static LARGE_INTEGER    offset;
+	static double           frequencyToMicroseconds;
+	static int              initialized = 0;
+	static BOOL             usePerformanceCounter = 0;
+
+	if (!initialized) {
+		LARGE_INTEGER performanceFrequency;
+		initialized = 1;
+		usePerformanceCounter = QueryPerformanceFrequency(&performanceFrequency);
+		if (usePerformanceCounter) {
+			QueryPerformanceCounter(&offset);
+			frequencyToMicroseconds = (double)performanceFrequency.QuadPart / 1000000.;
+		}
+		else {
+			offset = getFILETIMEoffset();
+			frequencyToMicroseconds = 10.;
+		}
+	}
+	if (usePerformanceCounter) QueryPerformanceCounter(&t);
+	else {
+		GetSystemTimeAsFileTime(&f);
+		t.QuadPart = f.dwHighDateTime;
+		t.QuadPart <<= 32;
+		t.QuadPart |= f.dwLowDateTime;
+	}
+
+	t.QuadPart -= offset.QuadPart;
+	microseconds = (double)t.QuadPart / frequencyToMicroseconds;
+	t.QuadPart = microseconds;
+	tv->tv_sec = t.QuadPart / 1000000;
+	//tv->tv_usec = t.QuadPart % 1000000;
+	tv->tv_nsec = t.QuadPart % 1000000;
+	return (0);
+}
+
+
 
 #ifdef __cplusplus
 } // extern "c"

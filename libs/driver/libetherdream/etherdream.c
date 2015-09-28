@@ -18,7 +18,12 @@
 
 #include "etherdream.h"
 
+ #include <chrono>
+ #include <thread>
 
+#include <conio.h> 
+
+#define CLOCK_REALTIME 0
 
 static FILE *trace_fp = NULL;
 #if __MACH__
@@ -49,10 +54,12 @@ static long long microseconds(void) {
  *
  * Like usleep().
  */
+#if 0
 static void microsleep(long long us) {
 	nanosleep(&(struct timespec){ .tv_sec = us / 1000000,
 	                             .tv_nsec = (us % 1000000) * 1000 }, NULL);
 }
+#endif
 
 /* trace(d, fmt, ...)
  *
@@ -101,9 +108,11 @@ static int wait_for_fd_activity(struct etherdream *d, int usec, int writable) {
 	fd_set set;
 	FD_ZERO(&set);
 	FD_SET(d->conn.dc_sock, &set);
+	struct timeval t;
+	t.tv_sec = usec / 1000000;
+	t.tv_usec = usec % 1000000;
 	int res = select(d->conn.dc_sock + 1, (writable ? NULL : &set),
-		(writable ? &set : NULL), &set, &(struct timeval){
-		.tv_sec = usec / 1000000, .tv_usec = usec % 1000000 });
+		(writable ? &set : NULL), &set, &t);
 	if (res < 0)
 		log_socket_error(d, "select");
 
@@ -224,12 +233,13 @@ static int dac_connect(struct etherdream *d) {
 	}
 
 	unsigned long nonblocking = 1;
-	ioctl(conn->dc_sock, FIONBIO, &nonblocking);
+	ioctlsocket(conn->dc_sock, FIONBIO, &nonblocking);
+	//ioctl(conn->dc_sock, FIONBIO, &nonblocking);
 
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = d->addr.s_addr, .sin_port = htons(7765)
-	};
+	struct sockaddr_in addr;// = { .sin_family = AF_INET,.sin_addr.s_addr = d->addr.s_addr,.sin_port = htons(7765) };
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = d->addr.s_addr;
+	addr.sin_port = htons(7765);
 
 	// Because the socket is nonblocking, this will always error...
 	connect(conn->dc_sock, (struct sockaddr *)&addr, (int)sizeof addr);
@@ -249,7 +259,7 @@ static int dac_connect(struct etherdream *d) {
 
 	// See if we have *actually* connected
 	int error;
-	unsigned int len = sizeof error;
+	int len = sizeof error;
 	if (getsockopt(conn->dc_sock, SOL_SOCKET, SO_ERROR, (char *)&error,
 	                                                           &len) < 0) {
 		log_socket_error(d, "getsockopt");
@@ -295,7 +305,8 @@ static int dac_connect(struct etherdream *d) {
 	return 0;
 
 bail:
-	close(d->conn.dc_sock);
+	shutdown(d->conn.dc_sock, SD_BOTH); // SD_RECEIVE SD_SEND SD_BOTH
+	//close(d->conn.dc_sock);
 	return -1;
 }
 
@@ -377,8 +388,11 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 	    && !d->conn.dc_begin_sent) {
 		trace(d, "L: Sending begin command...\n");
 
-		struct begin_command b = { .command = 'b', .point_rate = rate,
-		                           .low_water_mark = 0 };
+		struct begin_command b;// = { .command = 'b',.point_rate = rate, .low_water_mark = 0 };
+		b.command = 'b';
+		b.point_rate = rate;
+		b.low_water_mark = 0;
+
 		if ((res = send_all(d, (const char *)&b, sizeof b)) < 0)
 			return res;
 
@@ -470,7 +484,8 @@ static void *dac_loop(void *dv) {
 			if (cap > MIN_SEND_POINTS)
 				break;
 			if (d->conn.resp.dac_status.playback_state != 2) {
-				microsleep(1000);
+				std::this_thread::sleep_for(std::chrono::microseconds(1000));
+				//microsleep(1000);
 				break;
 			}
 
@@ -486,8 +501,8 @@ static void *dac_loop(void *dv) {
 					d->conn.resp.dac_status.buffer_fullness,
 					d->conn.unacked_points, expected_used,
 					expected_fullness, cap, wait_time);
-
-			microsleep(wait_time);
+			std::this_thread::sleep_for(std::chrono::microseconds(1000));
+			//microsleep(wait_time);
 
 			if ((res = dac_get_acks(d, 0)) < 0)
 				break;
@@ -587,7 +602,8 @@ void etherdream_disconnect(struct etherdream *d) {
 	pthread_mutex_unlock(&d->mutex);
 
 	pthread_join(d->workerthread, NULL);
-	close(d->conn.dc_sock);
+	shutdown(d->conn.dc_sock, SD_BOTH); // SD_RECEIVE SD_SEND SD_BOTH
+	//close(d->conn.dc_sock);
 }
 
 /* etherdream_get_id(d)
@@ -715,10 +731,11 @@ static void *watch_for_dacs(void *arg) {
 		return NULL;
 	}
 
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = htonl(INADDR_ANY), .sin_port = htons(7654)
-	};
+	struct sockaddr_in addr;// = { .sin_family = AF_INET,.sin_addr.s_addr = htonl(INADDR_ANY),.sin_port = htons(7654) };
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port = htons(7654);
+
 	if (bind(sock, (struct sockaddr *)&addr, sizeof addr) < 0) {
 		log_socket_error(NULL, "bind");
 		return NULL;
@@ -730,8 +747,8 @@ static void *watch_for_dacs(void *arg) {
 		struct sockaddr_in src;
 		struct dac_broadcast buf;
 		unsigned int srclen = sizeof src;
-		int len = recvfrom(sock, (char *)&buf, sizeof buf, 0,
-		                   (struct sockaddr *)&src, &srclen);
+		int len = recv(sock, (char *)&buf, sizeof buf, 0);
+		//int len = recvfrom(sock, (char *)&buf, sizeof buf, 0, (struct sockaddr *)&src, &srclen);
 		if (len < 0) {
 			log_socket_error(NULL, "recvfrom");
 			return NULL;
@@ -754,8 +771,9 @@ static void *watch_for_dacs(void *arg) {
 		pthread_mutex_unlock(&dac_list_lock);
 
 		/* Make a new DAC entry */
-		struct etherdream *new_dac;
-		new_dac = (void *)malloc(sizeof (struct etherdream));
+		struct etherdream *new_dac = (etherdream *)malloc(sizeof(struct etherdream));
+		//struct etherdream *new_dac;
+		//new_dac = (void *)malloc(sizeof (struct etherdream));
 		if (!new_dac) {
 			trace(NULL, "!! malloc(struct etherdream) failed\n");
 			continue;

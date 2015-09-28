@@ -1,5 +1,8 @@
 #include "ofxEtherdream.h"
 
+#include <chrono>
+#include <thread>
+
 //--------------------------------------------------------------
 void ofxEtherdream::setup(bool bStartThread, int idEtherdream) {
 
@@ -12,7 +15,8 @@ void ofxEtherdream::setup(bool bStartThread, int idEtherdream) {
     
 	/* Sleep for a bit over a second, to ensure that we see broadcasts
 	 * from all available DACs. */
-	usleep(1000000);
+	std::this_thread::sleep_for(std::chrono::microseconds(1000000));
+	//usleep(1000000);
     
     init();
     
@@ -40,11 +44,11 @@ bool ofxEtherdream::checkConnection(bool bForceReconnect) {
 }
 
 //--------------------------------------------------------------
-void ofxEtherdream::init() {
+bool ofxEtherdream::init() {
     int device_num = etherdream_dac_count();
 	if (!device_num || idEtherdreamConnection>device_num) {
 		ofLogWarning() << "ofxEtherdream::init - No DACs found";
-		return 0;
+		return false;
 	}
     
 	for (int i=0; i<device_num; i++) {
@@ -54,11 +58,15 @@ void ofxEtherdream::init() {
     device = etherdream_get(idEtherdreamConnection);
     
     ofLogNotice() << "ofxEtherdream::init - Connecting...";
-    if (etherdream_connect(device) < 0) return 1;
+    if (etherdream_connect(device) < 0) 
+	{
+		ofLogNotice() << "ofxEtherdream::init - done";
 
-    ofLogNotice() << "ofxEtherdream::init - done";
+		state = ETHERDREAM_FOUND;
+
+		return true;
+	}
     
-    state = ETHERDREAM_FOUND;
 }
 
 //--------------------------------------------------------------
