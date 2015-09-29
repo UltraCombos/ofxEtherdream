@@ -5,7 +5,9 @@
 extern "C" {
 #endif
 
+#if (_MSC_VER == 1900) // vs2015
 #define _TIMESPEC_DEFINED
+#endif
 
 #include <stdint.h>
 #include <protocol.h>

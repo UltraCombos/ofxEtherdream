@@ -74,12 +74,17 @@ static void trace(struct etherdream *d, char *fmt, ...) {
 	long long v = microseconds();
 	int len;
 
+#if (_MSC_VER == 1900) // vs2015
 	if (d)
-		len = snprintf(buf, sizeof buf, "[%d.%06d] %06lx ",
-			(int)(v / 1000000), (int)(v % 1000000), d->dac_id);
+		len = snprintf(buf, sizeof buf, "[%d.%06d] %06lx ", (int)(v / 1000000), (int)(v % 1000000), d->dac_id);
 	else
-		len = snprintf(buf, sizeof buf, "[%d.%06d]        ",
-			(int)(v / 1000000), (int)(v % 1000000));
+		len = snprintf(buf, sizeof buf, "[%d.%06d]        ", (int)(v / 1000000), (int)(v % 1000000));
+#else
+	if (d)
+		len = sprintf(buf, "[%d.%06d] %06lx ", (int)(v / 1000000), (int)(v % 1000000), d->dac_id);
+	else
+		len = sprintf(buf, "[%d.%06d]        ", (int)(v / 1000000), (int)(v % 1000000));
+#endif
 
 	va_list args;
 	va_start(args, fmt);
