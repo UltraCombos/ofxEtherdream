@@ -51,7 +51,7 @@ struct etherdream_point {
 #define BUFFER_POINTS_PER_FRAME 16000
 #define BUFFER_NFRAMES          2
 #define MAX_LATE_ACKS			64
-#define MIN_SEND_POINTS			40
+#define MIN_SEND_POINTS			4
 #define DEFAULT_TIMEOUT			2000000
 #define DEBUG_THRESHOLD_POINTS	800
 

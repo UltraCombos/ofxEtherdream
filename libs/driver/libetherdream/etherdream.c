@@ -504,8 +504,8 @@ static void *dac_loop(void *dv) {
 			}
 			
 			/* Wait a little. */
-			//int diff = MIN_SEND_POINTS - cap;
-			int diff = cap > MIN_SEND_POINTS ? MIN_SEND_POINTS : 0;
+			int diff = MIN_SEND_POINTS - cap;
+			//int diff = cap > MIN_SEND_POINTS ? MIN_SEND_POINTS : 0;
 			int wait_time = (1000000L * diff / b->pps);// + 500;
 
 			if (SHOULD_TRACE())
@@ -521,7 +521,7 @@ static void *dac_loop(void *dv) {
 			
 			if ((res = dac_get_acks(d, 0)) < 0)
 				break;
-			printf("sleep %i, %i, %i, %i\n", d->conn.resp.dac_status.buffer_fullness, d->conn.unacked_points, expected_used, time_diff);
+			//printf("sleep %i, %i, %i, %i\n", d->conn.resp.dac_status.buffer_fullness, d->conn.unacked_points, expected_used, time_diff);
 		}
 
 		if (res < 0)

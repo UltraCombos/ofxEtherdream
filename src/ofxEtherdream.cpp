@@ -107,7 +107,7 @@ void ofxEtherdream::send() {
 //    printf("wait for ready\n");
     if(bWaitBeforeSend) etherdream_wait_for_ready(device);
     else if(!etherdream_is_ready(device)) return;
-    printf("try to write points: %i\n", points.size());
+//    printf("try to write points: %i\n", points.size());
     // DODGY HACK: casting ofxIlda::Point* to etherdream_point*
     int res = etherdream_write(device, (etherdream_point*)points.data(), points.size(), pps, 1);
 //	printf("%i\n", res);
