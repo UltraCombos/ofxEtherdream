@@ -58,7 +58,7 @@ bool ofxEtherdream::init() {
     device = etherdream_get(idEtherdreamConnection);
     
     ofLogNotice() << "ofxEtherdream::init - Connecting...";
-    if (etherdream_connect(device) < 0) 
+    if (etherdream_connect(device) == 0) 
 	{
 		ofLogNotice() << "ofxEtherdream::init - done";
 
@@ -66,13 +66,15 @@ bool ofxEtherdream::init() {
 
 		return true;
 	}
+	else
+		return false;
     
 }
 
 //--------------------------------------------------------------
 void ofxEtherdream::threadedFunction() {
-    while (isThreadRunning() != 0) {
-        
+    while (isThreadRunning()) {
+		//printf("state: %i\n", state);
         switch (state) {
             case ETHERDREAM_NOTFOUND:
                 if(bAutoConnect) init();
@@ -90,7 +92,7 @@ void ofxEtherdream::threadedFunction() {
 
 //--------------------------------------------------------------
 void ofxEtherdream::start() {
-    startThread(true, false);  // TODO: blocking or nonblocking?
+    startThread(true);//, false);  // TODO: blocking or nonblocking?
 }
 
 //--------------------------------------------------------------
@@ -100,13 +102,15 @@ void ofxEtherdream::stop() {
 
 //--------------------------------------------------------------
 void ofxEtherdream::send() {
+//	printf("start send\n");
     if(!stateIsFound() || points.empty()) return;
-    
+//    printf("wait for ready\n");
     if(bWaitBeforeSend) etherdream_wait_for_ready(device);
     else if(!etherdream_is_ready(device)) return;
-    
+    printf("try to write points: %i\n", points.size());
     // DODGY HACK: casting ofxIlda::Point* to etherdream_point*
     int res = etherdream_write(device, (etherdream_point*)points.data(), points.size(), pps, 1);
+//	printf("%i\n", res);
     if (res != 0) {
         ofLogVerbose() << "ofxEtherdream::write " << res;
     }

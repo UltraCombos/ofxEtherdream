@@ -26,11 +26,7 @@
 #define CLOCK_REALTIME 0
 
 static FILE *trace_fp = NULL;
-#if __MACH__
-static long long timer_start, timer_freq_numer, timer_freq_denom;
-#else
 static struct timespec start_time;
-#endif
 static pthread_mutex_t dac_list_lock;
 static struct etherdream *dac_list = NULL;
 
@@ -39,15 +35,10 @@ static struct etherdream *dac_list = NULL;
  * Return the number of microseconds since library initialization.
  */
 static long long microseconds(void) {
-#if __MACH__
-	long long time_diff = mach_absolute_time() - timer_start;
-	return time_diff * timer_freq_numer / timer_freq_denom;
-#else
 	struct timespec t;
 	clock_gettime(CLOCK_REALTIME, &t);
 	return (t.tv_sec - start_time.tv_sec) * 1000000 +
 	       (t.tv_nsec - start_time.tv_nsec) / 1000;
-#endif
 }
 
 /* microsleep(us)
@@ -116,8 +107,7 @@ static int wait_for_fd_activity(struct etherdream *d, int usec, int writable) {
 	struct timeval t;
 	t.tv_sec = usec / 1000000;
 	t.tv_usec = usec % 1000000;
-	int res = select(d->conn.dc_sock + 1, (writable ? NULL : &set),
-		(writable ? &set : NULL), &set, &t);
+	int res = select(d->conn.dc_sock + 1, (writable ? NULL : &set), (writable ? &set : NULL), &set, &t);
 	if (res < 0)
 		log_socket_error(d, "select");
 
@@ -231,7 +221,22 @@ static int dac_connect(struct etherdream *d) {
 	memset(conn, 0, sizeof *conn);
 
 	// Open socket
-	conn->dc_sock = socket(AF_INET, SOCK_STREAM, 0);
+	//conn->dc_sock = socket(AF_INET, SOCK_STREAM, 0);
+#if 1
+	WSADATA wsaData = {0};
+	int iResult = 0;
+
+	SOCKET sock = INVALID_SOCKET;
+	int iFamily = AF_INET;
+	int iType = SOCK_STREAM;
+	int iProtocol = IPPROTO_TCP;
+
+	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (iResult != 0) {
+		printf("WSAStartup failed: %d\n", iResult);
+	}
+	conn->dc_sock = socket(iFamily, iType, iProtocol);
+#endif
 	if (conn->dc_sock < 0) {
 		log_socket_error(d, "socket");
 		return -1;
@@ -248,9 +253,10 @@ static int dac_connect(struct etherdream *d) {
 
 	// Because the socket is nonblocking, this will always error...
 	connect(conn->dc_sock, (struct sockaddr *)&addr, (int)sizeof addr);
-	if (errno != EINPROGRESS) {
+	if (errno != EINPROGRESS) 
+	{
 		log_socket_error(d, "connect");
-		goto bail;
+		//goto bail;
 	}
 
 	// Wait for connection to go through
@@ -265,8 +271,8 @@ static int dac_connect(struct etherdream *d) {
 	// See if we have *actually* connected
 	int error;
 	int len = sizeof error;
-	if (getsockopt(conn->dc_sock, SOL_SOCKET, SO_ERROR, (char *)&error,
-	                                                           &len) < 0) {
+	if (getsockopt(conn->dc_sock, SOL_SOCKET, SO_ERROR, (char *)&error, &len) < 0) 
+	{
 		log_socket_error(d, "getsockopt");
 		goto bail;
 	}
@@ -278,8 +284,8 @@ static int dac_connect(struct etherdream *d) {
 	}
 
 	int ndelay = 1;
-	if (setsockopt(conn->dc_sock, IPPROTO_TCP, TCP_NODELAY,
-	                                (char *)&ndelay, sizeof(ndelay)) < 0) {
+	if (setsockopt(conn->dc_sock, IPPROTO_TCP, TCP_NODELAY, (char *)&ndelay, sizeof(ndelay)) < 0) 
+	{
 		log_socket_error(d, "setsockopt TCP_NODELAY");
 		goto bail;
 	}
@@ -295,7 +301,8 @@ static int dac_connect(struct etherdream *d) {
 		goto bail;
 	dump_resp(d);
 
-	if (d->sw_revision >= 2) {
+	if (d->sw_revision >= 2) 
+	{
 		c = 'v';
 		if (send_all(d, &c, 1) < 0)
 			goto bail;
@@ -389,17 +396,20 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 		trace(d, "L: prepare ACKed\n");
 	}
 
-	if (st->buffer_fullness > 1600 && st->playback_state == 1 \
-	    && !d->conn.dc_begin_sent) {
+	// 1600+, 1, 0
+	if (st->buffer_fullness > 1600 && st->playback_state == 1 && !d->conn.dc_begin_sent) 
+	{
 		trace(d, "L: Sending begin command...\n");
-
+		//printf("%i, %i, %i\n", st->buffer_fullness, st->playback_state, d->conn.dc_begin_sent); 
 		struct begin_command b;// = { .command = 'b',.point_rate = rate, .low_water_mark = 0 };
 		b.command = 'b';
 		b.point_rate = rate;
 		b.low_water_mark = 0;
 
 		if ((res = send_all(d, (const char *)&b, sizeof b)) < 0)
+		{
 			return res;
+		}
 
 		d->conn.dc_begin_sent = 1;
 		d->conn.pending_meta_acks++;
@@ -417,8 +427,7 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 	d->conn.dc_local_buffer.header.command = 'd';
 	d->conn.dc_local_buffer.header.npoints = npoints;
 
-	memcpy(&d->conn.dc_local_buffer.data[0], data,
-		npoints * sizeof(struct dac_point));
+	memcpy(&d->conn.dc_local_buffer.data[0], data, npoints * sizeof(struct dac_point));
 
 	d->conn.dc_local_buffer.data[0].control |= DAC_CTRL_RATE_CHANGE;
 
@@ -436,8 +445,7 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 	return 0;
 }
 
-#define SHOULD_TRACE() (expected_fullness < DEBUG_THRESHOLD_POINTS \
-           || d->conn.resp.dac_status.buffer_fullness < DEBUG_THRESHOLD_POINTS)
+#define SHOULD_TRACE() (expected_fullness < DEBUG_THRESHOLD_POINTS || d->conn.resp.dac_status.buffer_fullness < DEBUG_THRESHOLD_POINTS)
 
 /* dac_loop(dv)
  *
@@ -451,6 +459,7 @@ static void *dac_loop(void *dv) {
 
 	while (1) {
 		/* Wait for us to have data */
+		
 		int state;
 		while ((state = d->state) == ST_READY) {
 //			trace(d, "L: waiting\n");   // MEMO
@@ -465,38 +474,39 @@ static void *dac_loop(void *dv) {
 		struct buffer_item *b = &d->buffer[d->frame_buffer_read];
 		int cap;
 		int expected_used, expected_fullness;
-
+		
+		//int while_debug = 0;
 		while (1) {
 			res = 0;
-
+			//while_debug++;
+			//printf("%i dddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n", while_debug);
 			/* Estimate how much data has been consumed since the
 			 * last time we got an ACK. */
-			long long time_diff = microseconds()
-			                    - d->conn.dc_last_ack_time;
+			long long time_diff = microseconds() - d->conn.dc_last_ack_time;
 
 			expected_used = time_diff * b->pps / 1000000;
 
 			if (d->conn.resp.dac_status.playback_state != 2)
 				expected_used = 0;
 
-			expected_fullness =
-				  d->conn.resp.dac_status.buffer_fullness
-				+ d->conn.unacked_points - expected_used;
+			expected_fullness = d->conn.resp.dac_status.buffer_fullness + d->conn.unacked_points - expected_used;
 
 			/* Now, see how much data we should write. */
 			cap = 1700 - expected_fullness;
-
+			//printf("%i qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\n", while_debug);
 			if (cap > MIN_SEND_POINTS)
 				break;
+			
 			if (d->conn.resp.dac_status.playback_state != 2) {
 				std::this_thread::sleep_for(std::chrono::microseconds(1000));
 				//microsleep(1000);
 				break;
 			}
-
+			
 			/* Wait a little. */
-			int diff = MIN_SEND_POINTS - cap;
-			int wait_time = 500 + (1000000L * diff / b->pps);
+			//int diff = MIN_SEND_POINTS - cap;
+			int diff = cap > MIN_SEND_POINTS ? MIN_SEND_POINTS : 0;
+			int wait_time = (1000000L * diff / b->pps);// + 500;
 
 			if (SHOULD_TRACE())
 				trace(d, "L: st %d om %d; b %d + %d - %d = %d"
@@ -506,11 +516,12 @@ static void *dac_loop(void *dv) {
 					d->conn.resp.dac_status.buffer_fullness,
 					d->conn.unacked_points, expected_used,
 					expected_fullness, cap, wait_time);
-			std::this_thread::sleep_for(std::chrono::microseconds(1000));
+			std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
 			//microsleep(wait_time);
-
+			
 			if ((res = dac_get_acks(d, 0)) < 0)
 				break;
+			printf("sleep %i, %i, %i, %i\n", d->conn.resp.dac_status.buffer_fullness, d->conn.unacked_points, expected_used, time_diff);
 		}
 
 		if (res < 0)
@@ -648,8 +659,8 @@ int etherdream_write(struct etherdream *d, const struct etherdream_point *pts,
 
 	pthread_mutex_unlock(&d->mutex);
 
-	// trace(d, "M: Writing: %d points, %d reps, %d pps\n", npts, reps, pps);
-
+	//trace(d, "M: Writing: %d points, %d reps, %d pps\n", npts, reps, pps);
+	
 	/* XXX: automatically pad out small frames */
 
 	int i;
@@ -723,15 +734,29 @@ int etherdream_stop(struct etherdream *d) {
 static void *watch_for_dacs(void *arg) {
 	(void)arg;
 
-	int sock = socket(AF_INET, SOCK_DGRAM, 0);
+	//int sock = socket(AF_INET, SOCK_DGRAM, 0);
+#if 1
+	WSADATA wsaData = {0};
+	int iResult = 0;
+
+	SOCKET sock = INVALID_SOCKET;
+	int iFamily = AF_INET;
+	int iType = SOCK_DGRAM;
+	int iProtocol = IPPROTO_UDP;
+
+	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (iResult != 0) {
+		printf("WSAStartup failed: %d\n", iResult);
+	}
+	sock = socket(iFamily, iType, iProtocol);
+#endif
 	if (sock < 0) {
 		log_socket_error(NULL, "socket");
 		return NULL;
 	}
 
 	int opt = 1;
-	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt,
-	                                                     sizeof opt) < 0) {
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof opt) < 0) {
 		log_socket_error(NULL, "setsockopt SO_REUSEADDR");
 		return NULL;
 	}
@@ -751,9 +776,8 @@ static void *watch_for_dacs(void *arg) {
 	while (1) {
 		struct sockaddr_in src;
 		struct dac_broadcast buf;
-		unsigned int srclen = sizeof src;
-		int len = recv(sock, (char *)&buf, sizeof buf, 0);
-		//int len = recvfrom(sock, (char *)&buf, sizeof buf, 0, (struct sockaddr *)&src, &srclen);
+		int srclen = sizeof src;
+		int len = recvfrom(sock, (char *)&buf, sizeof buf, 0, (struct sockaddr *)&src, &srclen);
 		if (len < 0) {
 			log_socket_error(NULL, "recvfrom");
 			return NULL;
