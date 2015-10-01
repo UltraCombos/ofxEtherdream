@@ -581,7 +581,6 @@ static void *dac_loop(void *dv) {
 		while (1) {
 			res = 0;
 			while_debug++;
-			//printf("%i dddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n", while_debug);
 			/* Estimate how much data has been consumed since the
 			 * last time we got an ACK. */
 			long long time_diff = microseconds() - d->conn.dc_last_ack_time;
@@ -595,7 +594,7 @@ static void *dac_loop(void *dv) {
 
 			/* Now, see how much data we should write. */
 			cap = 1700 - expected_fullness;
-			//printf("%i qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\n", while_debug);
+			
 			if (cap > MIN_SEND_POINTS)
 				break;
 			
@@ -607,7 +606,6 @@ static void *dac_loop(void *dv) {
 			
 			/* Wait a little. */
 			int diff = MIN_SEND_POINTS - cap;
-			//int diff = cap > MIN_SEND_POINTS ? MIN_SEND_POINTS : 0;
 			int wait_time = (1000000L * diff / b->pps) + 500;
 
 			if (SHOULD_TRACE())
