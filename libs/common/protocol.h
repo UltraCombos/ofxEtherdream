@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef PROTOCOL_H
+#ifndef PROTOCOL_H 
 #define PROTOCOL_H
 
 #include <stdint.h>

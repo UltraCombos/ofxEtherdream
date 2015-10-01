@@ -9,7 +9,7 @@
 
 
 #include "ofMain.h"
-#include "etherdream.h"
+#include "etherdream.h" 
 #include "ofxIldaFrame.h"
 
 class ofxEtherdream : public ofThread {

@@ -2,7 +2,7 @@
 #define ETHERDREAM_H
 
 #ifdef __cplusplus
-extern "C" {
+extern "C" { 
 #endif
 
 #if (_MSC_VER == 1900) // vs2015
