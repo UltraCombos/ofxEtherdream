@@ -109,7 +109,7 @@ void ofxEtherdream::send() {
     else if(!etherdream_is_ready(device)) return;
 //    printf("try to write points: %i\n", points.size());
     // DODGY HACK: casting ofxIlda::Point* to etherdream_point*
-    int res = etherdream_write(device, (etherdream_point*)points.data(), points.size(), pps, 1);
+    int res = etherdream_write(device, (etherdream_point*)points.data(), points.size(), pps, -1);
 //	printf("%i\n", res);
     if (res != 0) {
         ofLogVerbose() << "ofxEtherdream::write " << res;
