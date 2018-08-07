@@ -634,8 +634,10 @@ static void *dac_loop(void *dv) {
 
 		if (cap > b_left)
 			cap = b_left;
-		if (cap > 80)
-			cap = 80;
+		//if (cap > 80)
+		//	cap = 80;
+		cap = cap > 80 ? 80 : cap;
+
 
 		if (SHOULD_TRACE())
 			trace(d, "L: st %d om %d; b %d + %d - %d = %d"

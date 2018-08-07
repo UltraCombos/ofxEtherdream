@@ -39,8 +39,8 @@ struct dac_point {
 };
 
 #define DAC_CTRL_RATE_CHANGE    0x8000
-
-#pragma pack(push, 1)
+#define __attribute__(x)
+#pragma pack(1)
 
 struct dac_status {
 	uint8_t protocol;
@@ -62,37 +62,35 @@ struct dac_broadcast {
 	uint16_t buffer_capacity;
 	uint32_t max_point_rate;
     struct dac_status status;
-};
+} __attribute__ ((packed));
 
 struct begin_command {
 	uint8_t command;	/* 'b' (0x62) */
 	uint16_t low_water_mark;
 	uint32_t point_rate;
-};
+} __attribute__ ((packed));
 
 struct queue_command {
 	uint8_t command;	/* 'q' (0x74) */
 	uint32_t point_rate;
-};
+} __attribute__ ((packed));
 
 struct data_command {
 	uint8_t command;	/* 'd' (0x64) */
 	uint16_t npoints;
 	struct dac_point data[1];
-};
+} __attribute__ ((packed));
 
 struct data_command_header {
 	uint8_t command;	/* 'd' (0x64) */
 	uint16_t npoints;
-};
+} __attribute__ ((packed));
 
 struct dac_response {
 	uint8_t response;
 	uint8_t command;
 	struct dac_status dac_status;
-};
-
-#pragma pack(pop)
+} __attribute__ ((packed));
 
 #define CONNCLOSED_USER			(1)
 #define CONNCLOSED_UNKNOWNCMD	(2)

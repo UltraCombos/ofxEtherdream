@@ -49,13 +49,11 @@ struct etherdream_conn {
 	int dc_read_buf_size;
 	struct dac_response resp;
 	long long dc_last_ack_time;
-#pragma pack(push, 1)
 	struct {
 		struct queue_command queue;
 		struct data_command_header header;
 		struct dac_point data[1000];
-	} dc_local_buffer;
-#pragma pack(pop)
+	} __attribute__ ((packed)) dc_local_buffer;
 	int dc_begin_sent;
 	int ackbuf[MAX_LATE_ACKS];
 	int ackbuf_prod;
