@@ -19,102 +19,120 @@
 #define _POSIX_C_SOURCE 199309L
 #define _DARWIN_C_SOURCE 1
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <pthread.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include "etherdream.h" 
 
-#ifdef __MACH__
-#include <mach/mach.h>
-#include <mach/mach_time.h>
+ #include <chrono>
+ #include <thread>
+
+#if defined(_MSC_VER) || defined(_MSC_EXTENSIONS)
+#define DELTA_EPOCH_IN_MICROSECS  11644473600000000Ui64
+#else
+#define DELTA_EPOCH_IN_MICROSECS  11644473600000000ULL
 #endif
 
-#include <protocol.h>
-#include "etherdream.h"
-
-#define BUFFER_POINTS_PER_FRAME 16000
-#define BUFFER_NFRAMES          2
-#define MAX_LATE_ACKS		64
-#define MIN_SEND_POINTS		40
-#define DEFAULT_TIMEOUT		2000000
-#define DEBUG_THRESHOLD_POINTS	800
-
-struct etherdream_conn {
-	int dc_sock;
-	char dc_read_buf[1024];
-	int dc_read_buf_size;
-	struct dac_response resp;
-	long long dc_last_ack_time;
-
-	struct {
-		struct queue_command queue;
-		struct data_command_header header;
-		struct dac_point data[1000];
-	} __attribute__((packed)) dc_local_buffer;
-
-	int dc_begin_sent;
-	int ackbuf[MAX_LATE_ACKS];
-	int ackbuf_prod;
-	int ackbuf_cons;
-	int unacked_points;
-	int pending_meta_acks;
+struct timezone
+{
+	int  tz_minuteswest; /* minutes W of Greenwich */
+	int  tz_dsttime;     /* type of dst correction */
 };
 
-struct buffer_item {
-	struct dac_point data[BUFFER_POINTS_PER_FRAME];
-	int points;
-	int pps;
-	int repeatcount;
-	int idx;
-};
+static int gettimeofday(struct timeval *tv, struct timezone *tz)
+{
+	FILETIME ft;
+	unsigned __int64 tmpres = 0;
+	static int tzflag;
 
-enum dac_state {
-	ST_DISCONNECTED,
-	ST_READY,
-	ST_RUNNING,
-	ST_BROKEN,
-	ST_SHUTDOWN
-};
+	if (NULL != tv)
+	{
+		GetSystemTimeAsFileTime(&ft);
 
-struct etherdream {
-	pthread_mutex_t mutex;
-	pthread_cond_t loop_cond;
+		tmpres |= ft.dwHighDateTime;
+		tmpres <<= 32;
+		tmpres |= ft.dwLowDateTime;
 
-	struct buffer_item buffer[BUFFER_NFRAMES];
-	int frame_buffer_read;
-	int frame_buffer_fullness;
-	int bounce_count;
+		/*converting file time to unix epoch*/
+		tmpres -= DELTA_EPOCH_IN_MICROSECS;
+		tmpres /= 10;  /*convert into microseconds*/
+		tv->tv_sec = (long)(tmpres / 1000000UL);
+		tv->tv_usec = (long)(tmpres % 1000000UL);
+	}
 
-	pthread_t workerthread;
-	
-	struct in_addr addr;
-	struct etherdream_conn conn;
-	unsigned long dac_id;
-	int sw_revision;
-	char mac_address[6];
-	char version[32];
+	if (NULL != tz)
+	{
+		if (!tzflag)
+		{
+			_tzset();
+			tzflag++;
+		}
+		tz->tz_minuteswest = _timezone / 60; // _timezone
+		tz->tz_dsttime =  _daylight; // _daylight
+	}
 
-	enum dac_state state;
+	return 0;
+}
 
-	struct etherdream * next;
-};
+static LARGE_INTEGER getFILETIMEoffset()
+{
+	SYSTEMTIME s;
+	FILETIME f;
+	LARGE_INTEGER t;
+
+	s.wYear = 1970;
+	s.wMonth = 1;
+	s.wDay = 1;
+	s.wHour = 0;
+	s.wMinute = 0;
+	s.wSecond = 0;
+	s.wMilliseconds = 0;
+	SystemTimeToFileTime(&s, &f);
+	t.QuadPart = f.dwHighDateTime;
+	t.QuadPart <<= 32;
+	t.QuadPart |= f.dwLowDateTime;
+	return (t);
+}
+
+static int clock_gettime(int X, timespec *tv)
+{
+	LARGE_INTEGER           t;
+	FILETIME				f;
+	double                  microseconds;
+	static LARGE_INTEGER    offset;
+	static double           frequencyToMicroseconds;
+	static int              initialized = 0;
+	static BOOL             usePerformanceCounter = 0;
+
+	if (!initialized) {
+		LARGE_INTEGER performanceFrequency;
+		initialized = 1;
+		usePerformanceCounter = QueryPerformanceFrequency(&performanceFrequency);
+		if (usePerformanceCounter) {
+			QueryPerformanceCounter(&offset);
+			frequencyToMicroseconds = (double)performanceFrequency.QuadPart / 1000000.;
+		}
+		else {
+			offset = getFILETIMEoffset();
+			frequencyToMicroseconds = 10.;
+		}
+	}
+	if (usePerformanceCounter) QueryPerformanceCounter(&t);
+	else {
+		GetSystemTimeAsFileTime(&f);
+		t.QuadPart = f.dwHighDateTime;
+		t.QuadPart <<= 32;
+		t.QuadPart |= f.dwLowDateTime;
+	}
+
+	t.QuadPart -= offset.QuadPart;
+	microseconds = (double)t.QuadPart / frequencyToMicroseconds;
+	t.QuadPart = microseconds;
+	tv->tv_sec = t.QuadPart / 1000000;
+	//tv->tv_usec = t.QuadPart % 1000000;
+	tv->tv_nsec = t.QuadPart % 1000000;
+	return (0);
+}
 
 static FILE *trace_fp = NULL;
-#if __MACH__
-static long long timer_start, timer_freq_numer, timer_freq_denom;
-#else
 static struct timespec start_time;
-#endif
 static pthread_mutex_t dac_list_lock;
 static struct etherdream *dac_list = NULL;
 
@@ -123,17 +141,13 @@ static struct etherdream *dac_list = NULL;
  * Return the number of microseconds since library initialization.
  */
 static long long microseconds(void) {
-#if __MACH__
-	long long time_diff = mach_absolute_time() - timer_start;
-	return time_diff * timer_freq_numer / timer_freq_denom;
-#else
 	struct timespec t;
 	clock_gettime(CLOCK_REALTIME, &t);
 	return (t.tv_sec - start_time.tv_sec) * 1000000 +
 	       (t.tv_nsec - start_time.tv_nsec) / 1000;
-#endif
 }
 
+#if 0
 /* microsleep(us)
  *
  * Like usleep().
@@ -142,6 +156,7 @@ static void microsleep(long long us) {
 	nanosleep(&(struct timespec){ .tv_sec = us / 1000000,
 	                             .tv_nsec = (us % 1000000) * 1000 }, NULL);
 }
+#endif
 
 /* trace(d, fmt, ...)
  *
@@ -156,12 +171,17 @@ static void trace(struct etherdream *d, char *fmt, ...) {
 	long long v = microseconds();
 	int len;
 
+#if (_MSC_VER == 1900) // vs2015
 	if (d)
-		len = snprintf(buf, sizeof buf, "[%d.%06d] %06lx ",
-			(int)(v / 1000000), (int)(v % 1000000), d->dac_id);
+		len = snprintf(buf, sizeof buf, "[%d.%06d] %06lx ", (int)(v / 1000000), (int)(v % 1000000), d->dac_id);
 	else
-		len = snprintf(buf, sizeof buf, "[%d.%06d]        ",
-			(int)(v / 1000000), (int)(v % 1000000));
+		len = snprintf(buf, sizeof buf, "[%d.%06d]        ", (int)(v / 1000000), (int)(v % 1000000));
+#else
+	if (d)
+		len = sprintf(buf, "[%d.%06d] %06lx ", (int)(v / 1000000), (int)(v % 1000000), d->dac_id);
+	else
+		len = sprintf(buf, "[%d.%06d]       ", (int)(v / 1000000), (int)(v % 1000000));
+#endif
 
 	va_list args;
 	va_start(args, fmt);
@@ -176,8 +196,7 @@ static void trace(struct etherdream *d, char *fmt, ...) {
  * Log an error in a socket call.
  */
 static void log_socket_error(struct etherdream *d, const char *call) {
-	trace(d, "!! socket error in %s: %d: %s\n",
-		call, errno, strerror(errno));
+	trace(d, "!! socket error in %s: %d: %s\n", call, errno, strerror(errno));
 }
 
 /* wait_for_fd_activity(d, usec, writable)
@@ -190,9 +209,10 @@ static int wait_for_fd_activity(struct etherdream *d, int usec, int writable) {
 	fd_set set;
 	FD_ZERO(&set);
 	FD_SET(d->conn.dc_sock, &set);
-	int res = select(d->conn.dc_sock + 1, (writable ? NULL : &set),
-		(writable ? &set : NULL), &set, &(struct timeval){
-		.tv_sec = usec / 1000000, .tv_usec = usec % 1000000 });
+	struct timeval t;
+	t.tv_sec = usec / 1000000;
+	t.tv_usec = usec % 1000000;
+	int res = select(d->conn.dc_sock + 1, (writable ? NULL : &set), (writable ? &set : NULL), &set, &t);
 	if (res < 0)
 		log_socket_error(d, "select");
 
@@ -287,11 +307,9 @@ static void dump_resp(struct etherdream *d) {
 	struct etherdream_conn *conn = &d->conn;
 	struct dac_status *st = &conn->resp.dac_status;
 	trace(d, "-- Protocol %d / LE %d / playback %d / source %d\n",
-		0 /* st->protocol */, st->light_engine_state,
-		st->playback_state, st->source);
+		0 /* st->protocol */, st->light_engine_state, st->playback_state, st->source);
 	trace(d, "-- Flags: LE %x, playback %x, source %x\n",
-		st->light_engine_flags, st->playback_flags,
-		st->source_flags);
+		st->light_engine_flags, st->playback_flags, st->source_flags);
 	trace(d, "-- Buffer: %d points, %d pps, %d total played\n",
 		st->buffer_fullness, st->point_rate, st->point_count);
 }
@@ -306,74 +324,97 @@ static int dac_connect(struct etherdream *d) {
 	memset(conn, 0, sizeof *conn);
 
 	// Open socket
-	conn->dc_sock = socket(AF_INET, SOCK_STREAM, 0);
+	//conn->dc_sock = socket(AF_INET, SOCK_STREAM, 0);
+#if 1
+	WSADATA wsaData = {0};
+	int iResult = 0;
+
+	SOCKET sock = INVALID_SOCKET;
+	int iFamily = AF_INET;
+	int iType = SOCK_STREAM;
+	int iProtocol = IPPROTO_TCP;
+
+	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (iResult != 0) {
+		printf("WSAStartup failed: %d\n", iResult);
+	}
+	conn->dc_sock = socket(iFamily, iType, iProtocol);
+#endif
 	if (conn->dc_sock < 0) {
 		log_socket_error(d, "socket");
 		return -1;
 	}
 
 	unsigned long nonblocking = 1;
-	ioctl(conn->dc_sock, FIONBIO, &nonblocking);
+	ioctlsocket(conn->dc_sock, FIONBIO, &nonblocking);
 
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = d->addr.s_addr, .sin_port = htons(7765)
-	};
+	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = d->addr.s_addr;
+	addr.sin_port = htons(7765);
 
 	// Because the socket is nonblocking, this will always error...
 	connect(conn->dc_sock, (struct sockaddr *)&addr, (int)sizeof addr);
-	if (errno != EINPROGRESS) {
+	if (errno != EINPROGRESS) 
+	{
 		log_socket_error(d, "connect");
-		goto bail;
+		//goto bail;
 	}
 
 	// Wait for connection to go through
-	int res = wait_for_fd_activity(d, DEFAULT_TIMEOUT, 1);
-	if (res < 0)
-		goto bail;
-	if (res == 0) {
-		trace(d, "Connection to %s timed out.\n", inet_ntoa(d->addr));
-		goto bail;
+	{
+		int res = wait_for_fd_activity(d, DEFAULT_TIMEOUT, 1);
+		if (res < 0)
+			goto bail;
+		if (res == 0) {
+			trace(d, "Connection to %s timed out.\n", inet_ntoa(d->addr));
+			goto bail;
+		}
 	}
 
 	// See if we have *actually* connected
-	int error;
-	unsigned int len = sizeof error;
-	if (getsockopt(conn->dc_sock, SOL_SOCKET, SO_ERROR, (char *)&error,
-	                                                           &len) < 0) {
-		log_socket_error(d, "getsockopt");
-		goto bail;
+	{
+		int error;
+		int len = sizeof error;
+		if (getsockopt(conn->dc_sock, SOL_SOCKET, SO_ERROR, (char *)&error, &len) < 0) {
+				log_socket_error(d, "getsockopt");
+				goto bail;
+		}
+
+		if (error) {
+			errno = error;
+			log_socket_error(d, "connect");
+			goto bail;
+		}
 	}
 
-	if (error) {
-		errno = error;
-		log_socket_error(d, "connect");
-		goto bail;
-	}
-
-	int ndelay = 1;
-	if (setsockopt(conn->dc_sock, IPPROTO_TCP, TCP_NODELAY,
-	                                (char *)&ndelay, sizeof(ndelay)) < 0) {
-		log_socket_error(d, "setsockopt TCP_NODELAY");
-		goto bail;
+	{
+		int ndelay = 1;
+		if (setsockopt(conn->dc_sock, IPPROTO_TCP, TCP_NODELAY, (char *)&ndelay, sizeof(ndelay)) < 0) {
+				log_socket_error(d, "setsockopt TCP_NODELAY");
+				goto bail;
+		}
 	}
 
 	// After we connect, the DAC will send an initial status response
 	if (read_resp(d) < 0)
 		goto bail;
 
-	char c = 'p';
-	send_all(d, &c, 1);
+	{
+		char c = 'p';
+		send_all(d, &c, 1);
+	}
 
 	if (read_resp(d) < 0)
 		goto bail;
 	dump_resp(d);
 
+
 	if (d->sw_revision >= 2) {
-		c = 'v';
+		char c = 'v';
 		if (send_all(d, &c, 1) < 0)
 			goto bail;
-		res = read_bytes(d, d->version, sizeof(d->version));
+		int res = read_bytes(d, d->version, sizeof(d->version));
 		if (res < 0)
 			return res;
 	} else {
@@ -384,7 +425,7 @@ static int dac_connect(struct etherdream *d) {
 	return 0;
 
 bail:
-	close(d->conn.dc_sock);
+	shutdown(d->conn.dc_sock, SD_BOTH); // SD_RECEIVE SD_SEND SD_BOTH
 	return -1;
 }
 
@@ -411,8 +452,7 @@ static int check_data_response(struct etherdream *d) {
 
 	if (conn->resp.response != 'a' && conn->resp.response != 'I') {
 		trace(d, "!! protocol error: ACK for '%c' got '%c' (%d)\n",
-			conn->resp.command,
-			conn->resp.response, conn->resp.response);
+			  conn->resp.command, conn->resp.response, conn->resp.response);
 		return -1;
 	}
 
@@ -424,8 +464,7 @@ static int check_data_response(struct etherdream *d) {
  * Read any ACKs we are owed, waiting up to 'wait' microseconds.
  */
 static int dac_get_acks(struct etherdream *d, int wait) {
-	while (d->conn.pending_meta_acks
-	       || (d->conn.ackbuf_prod != d->conn.ackbuf_cons)) {
+	while (d->conn.pending_meta_acks || (d->conn.ackbuf_prod != d->conn.ackbuf_cons)) {
 		int res = wait_for_fd_activity(d, wait, 0);
 		if (res <= 0)
 			return res;
@@ -442,8 +481,7 @@ static int dac_get_acks(struct etherdream *d, int wait) {
  * Send points to the DAC, including prepare or begin commands and changing
  * the point rate as necessary.
  */
-static int dac_send_data(struct etherdream *d, struct dac_point *data,
-                         int npoints, int rate) {
+static int dac_send_data(struct etherdream *d, struct dac_point *data, int npoints, int rate) {
 	int res;
 	const struct dac_status *st = &d->conn.resp.dac_status;
 
@@ -462,14 +500,19 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 		trace(d, "L: prepare ACKed\n");
 	}
 
-	if (st->buffer_fullness > 1600 && st->playback_state == 1 \
-	    && !d->conn.dc_begin_sent) {
+	// 1600+, 1, 0
+	if (st->buffer_fullness > 1600 && st->playback_state == 1 && !d->conn.dc_begin_sent) {
 		trace(d, "L: Sending begin command...\n");
+		
+		struct begin_command b;
+		b.command = 'b';
+		b.point_rate = rate;
+		b.low_water_mark = 0;
 
-		struct begin_command b = { .command = 'b', .point_rate = rate,
-		                           .low_water_mark = 0 };
 		if ((res = send_all(d, (const char *)&b, sizeof b)) < 0)
+		{
 			return res;
+		}
 
 		d->conn.dc_begin_sent = 1;
 		d->conn.pending_meta_acks++;
@@ -487,8 +530,7 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 	d->conn.dc_local_buffer.header.command = 'd';
 	d->conn.dc_local_buffer.header.npoints = npoints;
 
-	memcpy(&d->conn.dc_local_buffer.data[0], data,
-		npoints * sizeof(struct dac_point));
+	memcpy(&d->conn.dc_local_buffer.data[0], data, npoints * sizeof(struct dac_point));
 
 	d->conn.dc_local_buffer.data[0].control |= DAC_CTRL_RATE_CHANGE;
 
@@ -506,8 +548,7 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 	return 0;
 }
 
-#define SHOULD_TRACE() (expected_fullness < DEBUG_THRESHOLD_POINTS \
-           || d->conn.resp.dac_status.buffer_fullness < DEBUG_THRESHOLD_POINTS)
+#define SHOULD_TRACE() (expected_fullness < DEBUG_THRESHOLD_POINTS || d->conn.resp.dac_status.buffer_fullness < DEBUG_THRESHOLD_POINTS)
 
 /* dac_loop(dv)
  *
@@ -516,7 +557,7 @@ static int dac_send_data(struct etherdream *d, struct dac_point *data,
 static void *dac_loop(void *dv) {
 	struct etherdream *d = (struct etherdream *)dv;
 	int res = 0;
-
+	//printf("buffer fullness %i\n", d->conn.resp.dac_status.buffer_fullness);
 	pthread_mutex_lock(&d->mutex);
 
 	while (1) {
@@ -535,37 +576,37 @@ static void *dac_loop(void *dv) {
 		struct buffer_item *b = &d->buffer[d->frame_buffer_read];
 		int cap;
 		int expected_used, expected_fullness;
-
+		
+		int while_debug = 0;
 		while (1) {
 			res = 0;
-
+			while_debug++;
 			/* Estimate how much data has been consumed since the
 			 * last time we got an ACK. */
-			long long time_diff = microseconds()
-			                    - d->conn.dc_last_ack_time;
+			long long time_diff = microseconds() - d->conn.dc_last_ack_time;
 
-			expected_used = time_diff * b->pps / 1000000;
+			expected_used = (int)time_diff * b->pps / 1000000;
 
 			if (d->conn.resp.dac_status.playback_state != 2)
 				expected_used = 0;
 
-			expected_fullness =
-				  d->conn.resp.dac_status.buffer_fullness
-				+ d->conn.unacked_points - expected_used;
+			expected_fullness = d->conn.resp.dac_status.buffer_fullness + d->conn.unacked_points - expected_used;
 
 			/* Now, see how much data we should write. */
 			cap = 1700 - expected_fullness;
-
+			
 			if (cap > MIN_SEND_POINTS)
 				break;
+			
 			if (d->conn.resp.dac_status.playback_state != 2) {
-				microsleep(1000);
+				std::this_thread::sleep_for(std::chrono::microseconds(1000));
+				//microsleep(1000);
 				break;
 			}
-
+			
 			/* Wait a little. */
 			int diff = MIN_SEND_POINTS - cap;
-			int wait_time = 500 + (1000000L * diff / b->pps);
+			int wait_time = (1000000L * diff / b->pps) + 500;
 
 			if (SHOULD_TRACE())
 				trace(d, "L: st %d om %d; b %d + %d - %d = %d"
@@ -576,10 +617,13 @@ static void *dac_loop(void *dv) {
 					d->conn.unacked_points, expected_used,
 					expected_fullness, cap, wait_time);
 
-			microsleep(wait_time);
-
+			std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
+			//microsleep(wait_time);
+			
 			if ((res = dac_get_acks(d, 0)) < 0)
 				break;
+			//printf("sleep %i, %i, %i, %i, %i\n", while_debug, d->conn.resp.dac_status.buffer_fullness, d->conn.unacked_points, expected_used, time_diff);
+			d->conn.resp.dac_status.buffer_fullness = 0;
 		}
 
 		if (res < 0)
@@ -590,8 +634,10 @@ static void *dac_loop(void *dv) {
 
 		if (cap > b_left)
 			cap = b_left;
-		if (cap > 80)
-			cap = 80;
+		//if (cap > 80)
+		//	cap = 80;
+		cap = cap > 80 ? 80 : cap;
+
 
 		if (SHOULD_TRACE())
 			trace(d, "L: st %d om %d; b %d + %d - %d = %d"
@@ -676,7 +722,7 @@ void etherdream_disconnect(struct etherdream *d) {
 	pthread_mutex_unlock(&d->mutex);
 
 	pthread_join(d->workerthread, NULL);
-	close(d->conn.dc_sock);
+	shutdown(d->conn.dc_sock, SD_BOTH); // SD_RECEIVE SD_SEND SD_BOTH
 }
 
 /* etherdream_get_id(d)
@@ -691,8 +737,7 @@ unsigned long etherdream_get_id(struct etherdream *d) {
  *
  * Documented in etherdream.h.
  */
-int etherdream_write(struct etherdream *d, const struct etherdream_point *pts,
-                     int npts, int pps, int reps) {
+int etherdream_write(struct etherdream *d, const struct etherdream_point *pts, int npts, int pps, int reps) {
 
 	/* Limit maximum frame size */
 	if (npts > BUFFER_POINTS_PER_FRAME)
@@ -711,13 +756,12 @@ int etherdream_write(struct etherdream *d, const struct etherdream_point *pts,
 		return -1;
 	}
 
-	struct buffer_item *next = &d->buffer[(d->frame_buffer_read
-	                         + d->frame_buffer_fullness) % BUFFER_NFRAMES];
+	struct buffer_item *next = &d->buffer[(d->frame_buffer_read + d->frame_buffer_fullness) % BUFFER_NFRAMES];
 
 	pthread_mutex_unlock(&d->mutex);
 
-	// trace(d, "M: Writing: %d points, %d reps, %d pps\n", npts, reps, pps);
-
+	//trace(d, "M: Writing: %d points, %d reps, %d pps\n", npts, reps, pps);
+	
 	/* XXX: automatically pad out small frames */
 
 	int i;
@@ -791,24 +835,40 @@ int etherdream_stop(struct etherdream *d) {
 static void *watch_for_dacs(void *arg) {
 	(void)arg;
 
-	int sock = socket(AF_INET, SOCK_DGRAM, 0);
+	//int sock = socket(AF_INET, SOCK_DGRAM, 0);
+#if 1
+	WSADATA wsaData = {0};
+	int iResult = 0;
+
+	SOCKET sock = INVALID_SOCKET;
+	int iFamily = AF_INET;
+	int iType = SOCK_DGRAM;
+	int iProtocol = IPPROTO_UDP;
+
+	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (iResult != 0) {
+		printf("WSAStartup failed: %d\n", iResult);
+	}
+	sock = socket(iFamily, iType, iProtocol);
+#endif
 	if (sock < 0) {
 		log_socket_error(NULL, "socket");
 		return NULL;
 	}
 
 	int opt = 1;
-	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt,
-	                                                     sizeof opt) < 0) {
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof opt) < 0) {
 		log_socket_error(NULL, "setsockopt SO_REUSEADDR");
 		return NULL;
 	}
 
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = htonl(INADDR_ANY), .sin_port = htons(7654)
-	};
-	if (bind(sock, (struct sockaddr *)&addr, sizeof addr) < 0) {
+	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port = htons(7654);
+
+	iResult = bind(sock, (struct sockaddr *)&addr, sizeof addr);
+	if (iResult < 0) {
 		log_socket_error(NULL, "bind");
 		return NULL;
 	}
@@ -818,9 +878,8 @@ static void *watch_for_dacs(void *arg) {
 	while (1) {
 		struct sockaddr_in src;
 		struct dac_broadcast buf;
-		unsigned int srclen = sizeof src;
-		int len = recvfrom(sock, (char *)&buf, sizeof buf, 0,
-		                   (struct sockaddr *)&src, &srclen);
+		int srclen = sizeof src;
+		int len = recvfrom(sock, (char *)&buf, sizeof buf, 0, (struct sockaddr *)&src, &srclen);
 		if (len < 0) {
 			log_socket_error(NULL, "recvfrom");
 			return NULL;
@@ -843,8 +902,7 @@ static void *watch_for_dacs(void *arg) {
 		pthread_mutex_unlock(&dac_list_lock);
 
 		/* Make a new DAC entry */
-		struct etherdream *new_dac;
-		new_dac = (void *)malloc(sizeof (struct etherdream));
+		struct etherdream *new_dac = (etherdream *)malloc(sizeof(struct etherdream));
 		if (!new_dac) {
 			trace(NULL, "!! malloc(struct etherdream) failed\n");
 			continue;
@@ -880,15 +938,7 @@ static void *watch_for_dacs(void *arg) {
  */
 int etherdream_lib_start(void) {
 	// Get high-resolution timer info
-#if __MACH__
-	timer_start = mach_absolute_time();
-	mach_timebase_info_data_t timebase_info;
-	mach_timebase_info(&timebase_info);
-	timer_freq_numer = timebase_info.numer;
-	timer_freq_denom = timebase_info.denom * 1000;
-#else
 	clock_gettime(CLOCK_REALTIME, &start_time);
-#endif
 
 	// Set up the logging fd (just stderr for now)
 	trace_fp = stderr;
@@ -941,3 +991,7 @@ struct etherdream *etherdream_get(unsigned long idx) {
 
 	return NULL;
 }
+
+
+
+
