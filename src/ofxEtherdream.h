@@ -7,9 +7,18 @@
 //
 //
 
+#define USE_J4C 1
 
 #include "ofMain.h"
+
+#if !USE_J4C
 #include "etherdream.h" 
+#else
+#include "j4cDAC.h"
+#include "dac.h"
+#define etherdream dac_t
+#endif
+
 #include "ofxIldaFrame.h"
 
 class ofxEtherdream : public ofThread {
@@ -25,8 +34,13 @@ public:
         clear();
         stop();
         if(stateIsFound()) {
+#if USE_J4C
+			EtherDreamStop(&idEtherdreamConnection);
+			EtherDreamCloseDevice(&idEtherdreamConnection);
+#else
             etherdream_stop(device);
             etherdream_disconnect(device);
+#endif
         }
     }
     
@@ -68,7 +82,10 @@ private:
     bool bWaitBeforeSend;
     bool bAutoConnect;
     
+#if !USE_J4C
     struct etherdream *device;
+#endif
+
     vector<ofxIlda::Point> points;
     
     int idEtherdreamConnection;
