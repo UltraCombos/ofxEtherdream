@@ -2,35 +2,10 @@
 #define ETHERDREAM_H
 
 #ifdef __cplusplus
-extern "C" { 
+extern "C" {
 #endif
 
 #include <stdint.h>
-
-#include <WinSock2.h>
-#include <errno.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <pthread.h>
-#include <sys/types.h>
-#include <conio.h> 
-
-#include <protocol.h>
-
-#define CLOCK_REALTIME 0
-
-#if (_MSC_VER == 1900) // vs2015
-#define _TIMESPEC_DEFINED
-#endif
-
-#define BUFFER_POINTS_PER_FRAME 16000
-#define BUFFER_NFRAMES          2
-#define MAX_LATE_ACKS			64
-#define MIN_SEND_POINTS			40
-#define DEFAULT_TIMEOUT			2000000
-#define DEBUG_THRESHOLD_POINTS	800
 
 struct etherdream_point {
 	int16_t x;
@@ -43,63 +18,7 @@ struct etherdream_point {
 	uint16_t u2;
 };
 
-struct etherdream_conn {
-	int dc_sock;
-	char dc_read_buf[1024];
-	int dc_read_buf_size;
-	struct dac_response resp;
-	long long dc_last_ack_time;
-	struct {
-		struct queue_command queue;
-		struct data_command_header header;
-		struct dac_point data[1000];
-	} __attribute__ ((packed)) dc_local_buffer;
-	int dc_begin_sent;
-	int ackbuf[MAX_LATE_ACKS];
-	int ackbuf_prod;
-	int ackbuf_cons;
-	int unacked_points;
-	int pending_meta_acks;
-};
-
-struct buffer_item {
-	struct dac_point data[BUFFER_POINTS_PER_FRAME];
-	int points;
-	int pps;
-	int repeatcount;
-	int idx;
-};
-
-enum dac_state {
-	ST_DISCONNECTED,
-	ST_READY,
-	ST_RUNNING,
-	ST_BROKEN,
-	ST_SHUTDOWN
-};
-    
-struct etherdream {
-	pthread_mutex_t mutex;
-	pthread_cond_t loop_cond;
-
-	struct buffer_item buffer[BUFFER_NFRAMES];
-	int frame_buffer_read;
-	int frame_buffer_fullness;
-	int bounce_count;
-
-	pthread_t workerthread;
-
-	struct in_addr addr;
-	struct etherdream_conn conn;
-	unsigned long dac_id;
-	int sw_revision;
-	char mac_address[6];
-	char version[32];
-
-	enum dac_state state;
-
-	struct etherdream * next;
-};
+struct etherdream;
 
 /* etherdream_lib_start()
  *
@@ -170,7 +89,8 @@ int etherdream_wait_for_ready(struct etherdream *d);
  * continuously sent, frame boundaries are not visible; however, to reduce
  * overhead, frames should be reasonably large (at least 50-100 points).
  */
-int etherdream_write(struct etherdream *d, const struct etherdream_point *pts, int npts, int pps, int repeatcount);
+int etherdream_write(struct etherdream *d, const struct etherdream_point *pts,
+                     int npts, int pps, int repeatcount);
 
 /* etherdream_stop(d)
  *
@@ -183,7 +103,6 @@ int etherdream_stop(struct etherdream *d);
  * Close the TCP connection to d.
  */
 void etherdream_disconnect(struct etherdream *d);
-
 
 #ifdef __cplusplus
 } // extern "c"
